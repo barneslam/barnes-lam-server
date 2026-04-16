@@ -7,6 +7,16 @@
 
 # Route /api/* → /.netlify/functions/*
 [[redirects]]
+  from = "/api/sync-all"
+  to = "/.netlify/functions/sync-all"
+  status = 200
+
+[[redirects]]
+  from = "/api/extract"
+  to = "/.netlify/functions/sync-all"
+  status = 200
+
+[[redirects]]
   from = "/api/build-persona"
   to = "/.netlify/functions/build-persona"
   status = 200

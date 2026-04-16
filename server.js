@@ -578,29 +578,55 @@ app.get('/health', (req, res) => {
 });
 
 // Extract from Fathom + rebuild persona + memory
+// Legacy endpoint — kept for backwards compat
 app.post('/api/extract', async (req, res) => {
-  try {
-    console.log('Fetching from Fathom...');
-    const raw = await fetchAllFathomMeetings();
-    const sessions = raw.map(fathomToSession);
-    await dbSave('sessions', sessions);
-    console.log(`Saved ${sessions.length} sessions.`);
+  req.url = '/api/sync-all';
+  return syncAll(req, res);
+});
 
-    // Build persona and memory in background
-    buildPersona(sessions).catch(console.error);
-    buildMemory(sessions).catch(console.error);
+// Find New Data — merge-safe sync across all connected sources
+async function syncAll(req, res) {
+  try {
+    // ── Fathom sessions (merge with existing to preserve data) ────────────────
+    console.log('Syncing Fathom sessions...');
+    const raw = await fetchAllFathomMeetings();
+    const incoming = raw.map(fathomToSession);
+    const existing = await dbLoad('sessions', []);
+    const existingMap = Object.fromEntries(existing.map(s => [s.id, s]));
+    const beforeCount = Object.keys(existingMap).length;
+    for (const s of incoming) {
+      existingMap[s.id] = { ...(existingMap[s.id] || {}), ...s };
+    }
+    const merged = Object.values(existingMap);
+    const newCount = merged.length - beforeCount;
+    await dbSave('sessions', merged);
+    console.log(`Sessions: ${merged.length} total (${newCount} new)`);
+
+    // ── Load counts from all other sources ────────────────────────────────────
+    const [emails, podcasts, website] = await Promise.all([
+      dbLoad('emails', []),
+      dbLoad('podcasts', []),
+      dbLoad('website', [])
+    ]);
+
+    // Build persona + memory in background
+    buildPersona(merged).catch(console.error);
+    buildMemory(merged).catch(console.error);
 
     res.json({
       success: true,
-      sessionCount: sessions.length,
-      withTranscript: sessions.filter(s => s.transcript).length,
-      message: 'Extraction complete. Persona and memory building in background.'
+      sessions: { total: merged.length, newCount, withTranscript: merged.filter(s => s.transcript).length },
+      emails: emails.length,
+      podcasts: podcasts.length,
+      website: website.length,
+      message: 'Sync complete. Persona and memory rebuilding in background.'
     });
   } catch(e) {
     console.error(e);
     res.status(500).json({ success: false, error: e.message });
   }
-});
+}
+app.post('/api/sync-all', syncAll);
 
 // Explicitly rebuild persona
 app.post('/api/build-persona', async (req, res) => {

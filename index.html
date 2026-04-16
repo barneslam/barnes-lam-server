@@ -277,7 +277,7 @@
   <!-- Admin panel (hidden by default) -->
   <div id="adminPanel" style="display:none;gap:8px;align-items:center;margin-left:8px;flex-wrap:wrap;">
     <button class="btn btn-secondary" id="buildBtn" onclick="buildPersona()">Rebuild Persona</button>
-    <button class="btn btn-secondary" id="extractBtn" onclick="extract()">Sync Fathom</button>
+    <button class="btn btn-secondary" id="extractBtn" onclick="extract()">Find New Data</button>
     <button class="btn btn-secondary" id="addEmailsBtn" onclick="openAddEmailsModal()" title="Add emails from any address">+ Emails</button>
   </div>
 
@@ -609,19 +609,25 @@
   // ── Actions ─────────────────────────────────────────────────────────────────
   async function extract() {
     const btn = document.getElementById('extractBtn');
-    btn.disabled = true; btn.textContent = 'Syncing...';
+    btn.disabled = true; btn.textContent = 'Finding new data...';
     try {
-      const r = await fetch(`${API}/api/extract`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+      const r = await fetch(`${API}/api/sync-all`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
       const d = await r.json();
       if (d.success) {
         await loadStats();
-        showNotice(`Synced ${d.sessionCount} sessions (${d.withTranscript} with transcripts). Building persona in background...`);
+        const parts = [
+          `${d.sessions.total} sessions (${d.sessions.newCount} new, ${d.sessions.withTranscript} with transcripts)`,
+          `${d.emails} emails`,
+          `${d.podcasts} podcasts`,
+          `${d.website} website pages`
+        ];
+        showNotice(`Found: ${parts.join(' · ')}. Building persona in background...`);
         setTimeout(async () => { await loadPersona(); await loadMemory(); await loadStats(); }, 8000);
       } else {
         showNotice('Error: ' + d.error, true);
       }
     } catch(e) { showNotice('Error: ' + e.message, true); }
-    btn.disabled = false; btn.textContent = 'Sync Fathom';
+    btn.disabled = false; btn.textContent = 'Find New Data';
   }
 
   async function buildPersona() {
