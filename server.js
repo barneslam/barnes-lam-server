@@ -22,8 +22,8 @@ app.use(express.json());
 app.use(express.static(__dirname));
 
 // ─── Supabase (knowledge base) ────────────────────────────────────────────────
-const SUPABASE_URL      = process.env.SUPABASE_URL      || 'https://qiwdgyilhwkndqkgqruf.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpd2RneWlsaHdrbmRxa2dxcnVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwOTc4NDcsImV4cCI6MjA5MTY3Mzg0N30.bEhiitzcDMOpViFFtBhfbUKcHVDah8t7DvsNlTxaOEk';
+const SUPABASE_URL      = process.env.SUPABASE_URL      || 'https://vrdximjglfejmrsyvuxx.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyZHhpbWpnbGZlam1yc3l2dXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYzMzQ0NzQsImV4cCI6MjA5MTkxMDQ3NH0.zLYj76cS5IrsFoPDFCDBK_t69he4UaVUQcCX61ePsGI';
 const SB_HOST = SUPABASE_URL.replace('https://', '');
 
 async function dbLoad(key, fallback) {
