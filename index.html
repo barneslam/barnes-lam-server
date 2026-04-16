@@ -275,9 +275,31 @@
     <button class="btn btn-secondary" id="adminBtn" onclick="toggleAdminPanel()" title="Admin tools">⚙</button>
   </div>
   <!-- Admin panel (hidden by default) -->
-  <div id="adminPanel" style="display:none;gap:8px;align-items:center;margin-left:8px;">
+  <div id="adminPanel" style="display:none;gap:8px;align-items:center;margin-left:8px;flex-wrap:wrap;">
     <button class="btn btn-secondary" id="buildBtn" onclick="buildPersona()">Rebuild Persona</button>
     <button class="btn btn-secondary" id="extractBtn" onclick="extract()">Sync Fathom</button>
+    <button class="btn btn-secondary" id="addEmailsBtn" onclick="openAddEmailsModal()" title="Add emails from any address">+ Emails</button>
+  </div>
+
+  <!-- Add Emails Modal -->
+  <div id="addEmailsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px 32px;width:520px;max-width:95vw;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h2 style="font-size:16px;font-weight:600;">Add Emails to Knowledge Base</h2>
+        <button onclick="closeAddEmailsModal()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">×</button>
+      </div>
+      <p style="font-size:13px;color:#94a3b8;margin-bottom:16px;line-height:1.5;">
+        Paste a JSON array of email objects. Each email needs: <code style="color:#7dd3fc;">id, subject, from, to, date, body</code>.<br>
+        Emails are deduped by id — safe to re-paste existing ones.
+      </p>
+      <textarea id="emailsJson" rows="10" placeholder='[{"id":"abc123","subject":"Meeting follow-up","from":"barnes@thestrategypitch.com","to":"client@example.com","date":"2026-04-01T10:00:00Z","body":"Hi, following up on..."}]'
+        style="width:100%;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:12px;font-family:monospace;resize:vertical;box-sizing:border-box;outline:none;"></textarea>
+      <div id="addEmailsStatus" style="font-size:12px;margin-top:8px;color:#64748b;min-height:16px;"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+        <button onclick="closeAddEmailsModal()" class="btn btn-secondary">Cancel</button>
+        <button onclick="submitAddEmails()" class="btn" style="background:#3b82f6;color:#fff;border:none;">Add to Knowledge Base</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -535,6 +557,53 @@
     panel.style.display = visible ? 'none' : 'flex';
     btn.style.background = visible ? '' : '#334155';
     btn.style.color = visible ? '' : '#e2e8f0';
+  }
+
+  function openAddEmailsModal() {
+    const modal = document.getElementById('addEmailsModal');
+    modal.style.display = 'flex';
+    document.getElementById('addEmailsStatus').textContent = '';
+    document.getElementById('emailsJson').value = '';
+  }
+
+  function closeAddEmailsModal() {
+    document.getElementById('addEmailsModal').style.display = 'none';
+  }
+
+  async function submitAddEmails() {
+    const statusEl = document.getElementById('addEmailsStatus');
+    const rawJson = document.getElementById('emailsJson').value.trim();
+    if (!rawJson) { statusEl.textContent = 'Paste email JSON first.'; statusEl.style.color = '#f87171'; return; }
+
+    let emails;
+    try { emails = JSON.parse(rawJson); }
+    catch(e) { statusEl.textContent = 'Invalid JSON: ' + e.message; statusEl.style.color = '#f87171'; return; }
+
+    if (!Array.isArray(emails)) emails = [emails];
+
+    statusEl.textContent = `Adding ${emails.length} email(s)...`;
+    statusEl.style.color = '#94a3b8';
+
+    try {
+      const res = await fetch(`${API}/api/emails/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails })
+      });
+      const data = await res.json();
+      if (data.success) {
+        statusEl.textContent = `✓ Added ${data.added} new email(s). Total: ${data.total}.`;
+        statusEl.style.color = '#4ade80';
+        document.getElementById('statEmails').textContent = data.total;
+        setTimeout(closeAddEmailsModal, 1800);
+      } else {
+        statusEl.textContent = 'Error: ' + data.error;
+        statusEl.style.color = '#f87171';
+      }
+    } catch(e) {
+      statusEl.textContent = 'Request failed: ' + e.message;
+      statusEl.style.color = '#f87171';
+    }
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────

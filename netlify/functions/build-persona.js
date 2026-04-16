@@ -1,6 +1,5 @@
 'use strict';
 const { ok, err, preflight, loadSessions, loadEmails, savePersona, saveMemory, callClaude } = require('./_lib');
-// Note: preflight is imported above — do not re-declare it below
 
 async function buildPersona(sessions, emails) {
   const barnesSpeech = sessions
@@ -76,7 +75,7 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return preflight();
   try {
     const [sessions, emails] = await Promise.all([loadSessions(), loadEmails()]);
-    if (!sessions.length) return err('No sessions. Extract first.', 400);
+    if (!sessions.length) return err('No sessions. Sync Fathom first.', 400);
 
     const [persona, memory] = await Promise.all([
       buildPersona(sessions, emails),
@@ -86,4 +85,3 @@ exports.handler = async (event) => {
     return ok({ success: true, persona, memory });
   } catch(e) { return err(e.message); }
 };
-

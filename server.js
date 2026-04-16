@@ -337,6 +337,34 @@ function searchPodcasts(podcasts, query, topK = 3) {
     .map(r => r.item);
 }
 
+function searchPersonal(personal, query) {
+  if (!personal) return null;
+  const q = query.toLowerCase();
+  const personalKeywords = ['family', 'personal', 'child', 'daughter', 'son', 'school', 'home', 'car', 'insurance',
+    'mortgage', 'finance', 'legal', 'lawyer', 'health', 'life', 'situation', 'challenge', 'transition',
+    'wylie', 'branksome', 'piano', 'bmw', 'accident', 'aviva', 'rbc', 'appliance', 'condo'];
+  const hasPersonalQuery = personalKeywords.some(kw => q.includes(kw));
+  // Also match if query terms appear in the personal blob
+  const blob = JSON.stringify(personal).toLowerCase();
+  const words = q.split(/\s+/).filter(w => w.length > 2);
+  const termMatch = words.some(w => blob.includes(w));
+  return (hasPersonalQuery || termMatch) ? personal : null;
+}
+
+function buildPersonalContext(personal) {
+  if (!personal) return '';
+  const challenges = (personal.currentChallenges || [])
+    .map(c => `[${c.category.toUpperCase()}] ${c.summary}: ${c.detail.substring(0, 400)}`)
+    .join('\n\n');
+  const familyInfo = personal.family?.child
+    ? `Child: ${personal.family.child.name} attends ${personal.family.child.school}. Activities: ${personal.family.child.activities?.join(', ')}.`
+    : '';
+  const style = personal.personalStyle
+    ? `Under pressure: ${personal.personalStyle.underPressure}\nResilience pattern: ${personal.personalStyle.resilience}`
+    : '';
+  return [familyInfo, challenges, style].filter(Boolean).join('\n\n');
+}
+
 function searchWebsite(pages, query, topK = 2) {
   return pages
     .filter(p => p.body)
@@ -509,7 +537,10 @@ Return ONLY valid JSON.`;
 
 // ─── System Prompt Builder ────────────────────────────────────────────────────
 async function getSystemPrompt() {
-  const persona = await dbLoad('persona', null);
+  const [persona, personal] = await Promise.all([
+    dbLoad('persona', null),
+    dbLoad('personal', null)
+  ]);
 
   let base = `You are Barnes Lam — responding based on your actual recorded sessions and thinking. You speak in first person as Barnes.
 
@@ -523,6 +554,18 @@ YOUR CORE VALUES: ${persona.coreValues?.join(', ')}
 YOUR FRAMEWORKS: ${persona.frameworks?.join(', ')}
 HOW YOU MAKE DECISIONS: ${persona.decisionPattern}
 YOUR CHARACTERISTIC PHRASES: ${persona.characteristicPhrases?.join(', ')}`;
+  }
+
+  if (personal) {
+    const child = personal.family?.child;
+    const challenges = (personal.currentChallenges || []).map(c => `${c.category}: ${c.summary}`).join('; ');
+    base += `
+
+YOUR PERSONAL LIFE CONTEXT (as of early 2026):
+- Home: ${personal.residences?.primary || 'Toronto'}
+- Family: ${child ? `Child ${child.name} attends ${child.school}` : ''}
+- Current challenges: ${challenges}
+- Personal style under pressure: ${personal.personalStyle?.underPressure?.substring(0, 200) || ''}`;
   }
 
   return base;
@@ -613,9 +656,9 @@ app.post('/api/config', async (req, res) => {
 // Stats
 app.get('/api/stats', async (req, res) => {
   try {
-    const [sessions, emails, podcasts, website, persona, memory] = await Promise.all([
+    const [sessions, emails, podcasts, website, persona, memory, personal] = await Promise.all([
       dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []),
-      dbLoad('website', []), dbLoad('persona', null), dbLoad('memory', null)
+      dbLoad('website', []), dbLoad('persona', null), dbLoad('memory', null), dbLoad('personal', null)
     ]);
     res.json({
       success: true,
@@ -626,6 +669,7 @@ app.get('/api/stats', async (req, res) => {
       websiteCount: website.length,
       personaBuilt: !!persona,
       memoryBuilt: !!memory,
+      personalLoaded: !!personal,
       kbActive: sessions.length > 0
     });
   } catch(e) {
@@ -679,8 +723,8 @@ app.post('/api/chat', async (req, res) => {
   if (!message) return res.status(400).json({ success: false, error: 'message required' });
 
   try {
-    const [sessions, emails, podcasts, website] = await Promise.all([
-      dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []), dbLoad('website', [])
+    const [sessions, emails, podcasts, website, personal] = await Promise.all([
+      dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []), dbLoad('website', []), dbLoad('personal', null)
     ]);
     if (!sessions.length && !emails.length && !podcasts.length && !website.length) {
       return res.status(400).json({ success: false, error: 'No knowledge base. Run /api/extract first.' });
@@ -691,16 +735,19 @@ app.post('/api/chat', async (req, res) => {
     const relevantEmails   = searchEmails(emails, message, 2);
     const relevantPodcasts = searchPodcasts(podcasts, message, 2);
     const relevantWebsite  = searchWebsite(website, message, 1);
+    const relevantPersonal = searchPersonal(personal, message);
     const sessionContext   = buildContext(relevantSessions);
     const emailContext     = buildEmailContext(relevantEmails);
     const podcastContext   = buildPodcastContext(relevantPodcasts);
     const websiteContext   = buildWebsiteContext(relevantWebsite);
+    const personalContext  = buildPersonalContext(relevantPersonal);
 
     const contextParts = [];
     if (websiteContext)  contextParts.push(`YOUR POSITIONING (website copy — most refined thinking):\n${websiteContext}`);
     if (sessionContext)  contextParts.push(`RELEVANT MEETING TRANSCRIPTS:\n${sessionContext}`);
     if (emailContext)    contextParts.push(`RELEVANT EMAILS YOU WROTE:\n${emailContext}`);
     if (podcastContext)  contextParts.push(`RELEVANT PODCAST EPISODES YOU HOSTED:\n${podcastContext}`);
+    if (personalContext) contextParts.push(`YOUR PERSONAL LIFE CONTEXT:\n${personalContext}`);
     const fullContext = contextParts.join('\n\n') || 'No closely matching content found — answer from your general patterns.';
 
     const systemPrompt = await getSystemPrompt();
@@ -758,6 +805,31 @@ app.post('/api/ask', async (req, res) => {
     const fullSystem = `${systemPrompt}\n\nRELEVANT TRANSCRIPTS:\n${context}`;
     const answer = await callClaude(fullSystem, req.body.question, 1000);
     res.json({ success: true, question: req.body.question, answer, sources: relevant.map(s => s.title) });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Add emails to knowledge base (dedupe by id)
+// Accepts: { emails: [{id, subject, from, to, date, body}] }
+// Works with any email source — Barnes can use Claude Code + Gmail MCP to pull
+// emails from any address and POST them here.
+app.post('/api/emails/add', async (req, res) => {
+  const { emails: incoming } = req.body;
+  if (!Array.isArray(incoming) || !incoming.length) {
+    return res.status(400).json({ success: false, error: 'emails array required' });
+  }
+  try {
+    const existing = await dbLoad('emails', []);
+    const existingIds = new Set(existing.map(e => e.id));
+    const newEmails = incoming.filter(e => e.id && !existingIds.has(e.id));
+    if (!newEmails.length) {
+      return res.json({ success: true, added: 0, total: existing.length, message: 'All emails already in knowledge base' });
+    }
+    const merged = [...existing, ...newEmails];
+    await dbSave('emails', merged);
+    console.log(`Added ${newEmails.length} new emails (total: ${merged.length})`);
+    res.json({ success: true, added: newEmails.length, total: merged.length });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }

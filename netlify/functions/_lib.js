@@ -2,13 +2,14 @@
 const https = require('https');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const SUPABASE_URL      = process.env.SUPABASE_URL      || 'https://qiwdgyilhwkndqkgqruf.supabase.co';
-const SUPABASE_KEY      = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpd2RneWlsaHdrbmRxa2dxcnVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwOTc4NDcsImV4cCI6MjA5MTY3Mzg0N30.bEhiitzcDMOpViFFtBhfbUKcHVDah8t7DvsNlTxaOEk';
+const SUPABASE_URL      = process.env.SUPABASE_URL      || 'https://vrdximjglfejmrsyvuxx.supabase.co';
+const SUPABASE_KEY      = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyZHhpbWpnbGZlam1yc3l2dXh4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYzMzQ0NzQsImV4cCI6MjA5MTkxMDQ3NH0.zLYj76cS5IrsFoPDFCDBK_t69he4UaVUQcCX61ePsGI';
 const ANTHROPIC_KEY     = process.env.ANTHROPIC_API_KEY || '';
 const DEEPGRAM_KEY      = process.env.DEEPGRAM_API_KEY  || '91fd82f8ab74a50a0784babd083ff9a24f18fdab';
 const ELEVENLABS_KEY    = process.env.ELEVENLABS_API_KEY  || '';
 const ELEVENLABS_VOICE  = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
 const FATHOM_KEY        = process.env.FATHOM_API_KEY    || '2aPN-Af79yOWj-PAIdGH1A.YjIym7YNtwzPjSRRrwK4WU3WPmedRP0DNHusDkfhaWU';
+const SB_HOST           = SUPABASE_URL.replace('https://', '');
 
 // ── CORS headers ──────────────────────────────────────────────────────────────
 const CORS = {
@@ -28,23 +29,22 @@ function preflight() {
   return { statusCode: 204, headers: CORS, body: '' };
 }
 
-// ── Supabase REST helper ──────────────────────────────────────────────────────
-function supaRequest(method, path, body, extra = {}) {
+// ── Supabase bl_knowledge (single JSONB table) ────────────────────────────────
+function supaRequest(method, path, body, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
-    const url = new URL(SUPABASE_URL + '/rest/v1/' + path);
     const bodyStr = body ? JSON.stringify(body) : null;
     const headers = {
       'apikey': SUPABASE_KEY,
       'Authorization': `Bearer ${SUPABASE_KEY}`,
       'Content-Type': 'application/json',
       'Prefer': 'return=representation',
-      ...extra
+      ...extraHeaders
     };
     if (bodyStr) headers['Content-Length'] = Buffer.byteLength(bodyStr);
 
     const req = https.request({
-      hostname: url.hostname, port: 443,
-      path: url.pathname + url.search,
+      hostname: SB_HOST, port: 443,
+      path: '/rest/v1/' + path,
       method, headers
     }, (res) => {
       let data = '';
@@ -60,55 +60,29 @@ function supaRequest(method, path, body, extra = {}) {
   });
 }
 
-async function dbGet(table, query = '') {
-  const { data } = await supaRequest('GET', `${table}?${query}`);
-  return Array.isArray(data) ? data : (data ? [data] : []);
+async function dbLoad(key, fallback = null) {
+  const { data } = await supaRequest('GET', `bl_knowledge?key=eq.${encodeURIComponent(key)}&select=payload&limit=1`);
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row && row.payload !== undefined) ? row.payload : fallback;
 }
 
-async function dbUpsert(table, rows) {
-  const body = Array.isArray(rows) ? rows : [rows];
-  await supaRequest('POST', table, body, { 'Prefer': 'resolution=merge-duplicates,return=minimal' });
+async function dbSave(key, payload) {
+  await supaRequest('POST', 'bl_knowledge', { key, payload }, { 'Prefer': 'resolution=merge-duplicates,return=minimal' });
 }
 
-async function dbGetOne(table, query = '') {
-  const rows = await dbGet(table, query + '&limit=1');
-  return rows[0] || null;
-}
+// ── Convenience wrappers ──────────────────────────────────────────────────────
+const loadSessions  = () => dbLoad('sessions',  []);
+const loadEmails    = () => dbLoad('emails',    []);
+const loadPodcasts  = () => dbLoad('podcasts',  []);
+const loadWebsite   = () => dbLoad('website',   []);
+const loadPersonal  = () => dbLoad('personal',  null);
+const loadPersona   = () => dbLoad('persona',   null);
+const loadMemory    = () => dbLoad('memory',    null);
 
-// ── Supabase session helpers ──────────────────────────────────────────────────
-async function loadSessions() {
-  return dbGet('bl_sessions', 'order=date.desc');
-}
-async function saveSessions(sessions) {
-  if (!sessions.length) return;
-  await dbUpsert('bl_sessions', sessions.map(s => ({
-    id: s.id, title: s.title, date: s.date, duration: s.duration,
-    participants: s.participants || [], transcript: s.transcript || '',
-    summary: s.summary || '', action_items: s.actionItems || [],
-    share_url: s.shareUrl || '', fathom_url: s.fathomUrl || ''
-  })));
-}
-async function loadPersona() {
-  const row = await dbGetOne('bl_persona', 'id=eq.1&select=data,built_at');
-  return row ? { ...row.data, builtAt: row.built_at } : null;
-}
-async function savePersona(data) {
-  await dbUpsert('bl_persona', { id: 1, data, built_at: new Date().toISOString() });
-}
-async function loadMemory() {
-  const row = await dbGetOne('bl_memory', 'id=eq.1&select=data,updated_at');
-  return row ? { ...row.data, lastUpdated: row.updated_at } : null;
-}
-async function saveMemory(data) {
-  await dbUpsert('bl_memory', { id: 1, data, updated_at: new Date().toISOString() });
-}
-async function loadEmails() {
-  return dbGet('bl_emails', 'order=date.desc');
-}
-async function countSessions() {
-  const { data } = await supaRequest('GET', 'bl_sessions?select=id&limit=1', null, { 'Prefer': 'count=exact' });
-  return Array.isArray(data) ? data.length : 0; // approximate; full count needs HEAD
-}
+async function saveSessions(sessions) { await dbSave('sessions', sessions); }
+async function savePersona(data)      { await dbSave('persona', data); }
+async function saveMemory(data)       { await dbSave('memory', data); }
+async function saveEmails(emails)     { await dbSave('emails', emails); }
 
 // ── Fathom API ────────────────────────────────────────────────────────────────
 function fathomPage(cursor) {
@@ -213,18 +187,18 @@ function callElevenLabs(text) {
   });
 }
 
-// ── RAG ───────────────────────────────────────────────────────────────────────
-function scoreSession(s, query) {
+// ── RAG — unified scorer ──────────────────────────────────────────────────────
+function scoreItem(item, query, titleField, bodyField) {
   const q = query.toLowerCase();
   const words = q.split(/\s+/).filter(w => w.length > 2);
-  const title = (s.title || '').toLowerCase();
-  const body = (s.transcript || '').toLowerCase();
+  const title = (item[titleField] || '').toLowerCase();
+  const body  = (item[bodyField]  || '').toLowerCase();
   let score = 0;
   for (const w of words) {
     score += (title.match(new RegExp(w, 'g')) || []).length * 5;
     score += Math.min((body.match(new RegExp(w, 'g')) || []).length, 20);
   }
-  const age = Date.now() - new Date(s.date).getTime();
+  const age = Date.now() - new Date(item.date).getTime();
   if (age < 90 * 86400000) score += 10;
   return score;
 }
@@ -232,11 +206,52 @@ function scoreSession(s, query) {
 function searchSessions(sessions, query, topK = 5) {
   return sessions
     .filter(s => s.transcript)
-    .map(s => ({ s, score: scoreSession(s, query) }))
+    .map(s => ({ s, score: scoreItem(s, query, 'title', 'transcript') }))
     .sort((a, b) => b.score - a.score)
     .slice(0, topK)
     .filter(r => r.score > 0)
     .map(r => r.s);
+}
+
+function searchEmails(emails, query, topK = 3) {
+  return emails
+    .map(e => ({ e, score: scoreItem(e, query, 'subject', 'body') }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .filter(r => r.score > 0)
+    .map(r => r.e);
+}
+
+function searchPodcasts(podcasts, query, topK = 3) {
+  return podcasts
+    .map(p => ({ p, score: scoreItem(p, query, 'title', 'description') }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .filter(r => r.score > 0)
+    .map(r => r.p);
+}
+
+function searchWebsite(website, query, topK = 2) {
+  return website
+    .map(w => ({ w, score: scoreItem(w, query, 'title', 'content') }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .filter(r => r.score > 0)
+    .map(r => r.w);
+}
+
+function searchPersonal(personal, query) {
+  if (!personal) return null;
+  const q = query.toLowerCase();
+  const personalKeywords = ['family','personal','child','daughter','son','school',
+    'home','car','insurance','mortgage','finance','legal','lawyer','health','life',
+    'situation','challenge','transition','wylie','branksome','piano','bmw','accident',
+    'aviva','rbc','appliance','condo','broadway','residence'];
+  const hasPersonalQuery = personalKeywords.some(kw => q.includes(kw));
+  const blob = JSON.stringify(personal).toLowerCase();
+  const words = q.split(/\s+/).filter(w => w.length > 2);
+  const termMatch = words.some(w => blob.includes(w));
+  return (hasPersonalQuery || termMatch) ? personal : null;
 }
 
 function buildContext(sessions, maxChars = 1500) {
@@ -247,9 +262,37 @@ function buildContext(sessions, maxChars = 1500) {
   ).join('\n\n');
 }
 
-// ── Persona system prompt ─────────────────────────────────────────────────────
+function buildEmailContext(emails) {
+  return emails.map(e =>
+    `--- EMAIL: ${e.subject} [${(e.date || '').substring(0,10)}] ---\nTo: ${e.to || ''}\n${(e.body || '').substring(0, 600)}`
+  ).join('\n\n');
+}
+
+function buildPodcastContext(podcasts) {
+  return podcasts.map(p =>
+    `--- PODCAST: ${p.title} ---\n${(p.description || p.summary || '').substring(0, 500)}`
+  ).join('\n\n');
+}
+
+function buildWebsiteContext(website) {
+  return website.map(w =>
+    `--- WEBSITE [${w.title}]: ${w.url || ''} ---\n${(w.content || '').substring(0, 600)}`
+  ).join('\n\n');
+}
+
+function buildPersonalContext(personal) {
+  if (!personal) return '';
+  const child = personal.family?.child;
+  const challenges = (personal.currentChallenges || [])
+    .map(c => `${c.category}: ${c.summary}`).join('; ');
+  return `YOUR PERSONAL CONTEXT:\n- Home: ${personal.residences?.primary || ''}\n` +
+    (child ? `- Family: Child ${child.name} attends ${child.school}\n` : '') +
+    (challenges ? `- Current challenges: ${challenges}\n` : '');
+}
+
+// ── System prompt ─────────────────────────────────────────────────────────────
 async function getSystemPrompt() {
-  const persona = await loadPersona();
+  const [persona, personal] = await Promise.all([loadPersona(), loadPersonal()]);
   let base = `You are Barnes Lam — responding based on your actual recorded sessions and thinking. You speak in first person as Barnes.\n\nBe direct, practical, and grounded. Draw on real patterns from the transcripts provided. Don't be generic.`;
   if (persona) {
     base += `\n\nYOUR COMMUNICATION STYLE: ${persona.communicationStyle}
@@ -258,14 +301,22 @@ YOUR FRAMEWORKS: ${(persona.frameworks || []).join(', ')}
 HOW YOU MAKE DECISIONS: ${persona.decisionPattern}
 YOUR CHARACTERISTIC PHRASES: ${(persona.characteristicPhrases || []).join(', ')}`;
   }
+  if (personal) {
+    base += '\n\n' + buildPersonalContext(personal);
+  }
   return base;
 }
 
 module.exports = {
   ok, err, preflight, CORS,
-  loadSessions, saveSessions, loadPersona, savePersona, loadMemory, saveMemory, loadEmails,
+  dbLoad, dbSave,
+  loadSessions, loadEmails, loadPodcasts, loadWebsite, loadPersonal,
+  loadPersona, loadMemory,
+  saveSessions, savePersona, saveMemory, saveEmails,
   fetchAllFathom, fathomToSession,
   callClaude, callDeepgram, callElevenLabs,
-  searchSessions, buildContext, getSystemPrompt,
+  scoreItem, searchSessions, searchEmails, searchPodcasts, searchWebsite, searchPersonal,
+  buildContext, buildEmailContext, buildPodcastContext, buildWebsiteContext, buildPersonalContext,
+  getSystemPrompt,
   ELEVENLABS_KEY
 };
