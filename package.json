@@ -1,0 +1,21 @@
+{
+  "name": "barnes-lam-personal-ai",
+  "version": "2.0.0",
+  "description": "Barnes Lam Personal AI — voice-enabled, Fathom-grounded, deployed on Netlify",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "netlify": "netlify dev"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["personal-ai", "fathom", "anthropic", "claude", "voice"],
+  "author": "Barnes Lam",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  }
+}

@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Barnes Lam — Personal AI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Top bar ── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: #1e293b;
+      border-bottom: 1px solid #334155;
+      flex-shrink: 0;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 12px; }
+    .avatar {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 16px;
+    }
+    .topbar-name { font-weight: 600; font-size: 16px; }
+    .topbar-sub { font-size: 12px; color: #64748b; }
+    .topbar-stats { display: flex; gap: 20px; }
+    .stat { text-align: center; }
+    .stat-val { font-size: 18px; font-weight: 700; color: #60a5fa; }
+    .stat-lbl { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .5px; }
+    .topbar-actions { display: flex; gap: 10px; }
+    .btn {
+      padding: 8px 16px; border-radius: 6px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer; transition: all .2s;
+    }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: #334155; color: #94a3b8; border: 1px solid #475569; }
+    .btn-secondary:hover { background: #3d4f63; color: #e2e8f0; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── Layout ── */
+    .layout { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      width: 280px; flex-shrink: 0;
+      background: #1a2535;
+      border-right: 1px solid #334155;
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .sidebar-tabs {
+      display: flex; border-bottom: 1px solid #334155;
+    }
+    .tab {
+      flex: 1; padding: 11px 8px; text-align: center;
+      font-size: 12px; font-weight: 500; color: #64748b;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: all .2s;
+    }
+    .tab.active { color: #60a5fa; border-bottom-color: #60a5fa; }
+    .sidebar-body { flex: 1; overflow-y: auto; padding: 16px; }
+
+    .sidebar-section { margin-bottom: 20px; }
+    .sidebar-heading {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .8px; color: #64748b; margin-bottom: 10px;
+    }
+    .persona-item {
+      margin-bottom: 12px;
+    }
+    .persona-label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+    .persona-val { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+    .pill {
+      display: inline-block; padding: 3px 8px; border-radius: 12px;
+      background: #1e3a5f; color: #93c5fd; font-size: 11px;
+      margin: 2px 2px 2px 0;
+    }
+    .person-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 6px 0; border-bottom: 1px solid #1e293b;
+      font-size: 13px;
+    }
+    .person-count { color: #64748b; font-size: 12px; }
+    .topic-row {
+      padding: 8px 0; border-bottom: 1px solid #1e293b;
+    }
+    .topic-name { font-size: 13px; color: #e2e8f0; margin-bottom: 3px; }
+    .topic-desc { font-size: 12px; color: #64748b; }
+    .empty-msg { font-size: 13px; color: #475569; text-align: center; padding: 20px 0; }
+    .build-hint {
+      font-size: 12px; color: #64748b; text-align: center;
+      padding: 12px; background: #1e293b; border-radius: 8px; line-height: 1.5;
+    }
+
+    /* ── Chat ── */
+    .chat-area {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .messages {
+      flex: 1; overflow-y: auto; padding: 24px;
+      display: flex; flex-direction: column; gap: 20px;
+    }
+
+    .msg { display: flex; gap: 12px; max-width: 820px; }
+    .msg.user { flex-direction: row-reverse; align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg-avatar {
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+    }
+    .msg.user .msg-avatar { background: #334155; color: #94a3b8; }
+    .msg.assistant .msg-avatar {
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white;
+    }
+
+    .msg-body { display: flex; flex-direction: column; gap: 6px; }
+    .msg-bubble {
+      padding: 12px 16px; border-radius: 12px;
+      font-size: 14px; line-height: 1.65;
+    }
+    .msg.user .msg-bubble {
+      background: #1e3a5f; color: #e2e8f0;
+      border-radius: 12px 2px 12px 12px;
+    }
+    .msg.assistant .msg-bubble {
+      background: #1e293b; color: #e2e8f0;
+      border-radius: 2px 12px 12px 12px;
+      border: 1px solid #334155;
+    }
+    .msg-sources {
+      display: flex; flex-wrap: wrap; gap: 4px;
+    }
+    .source-chip {
+      font-size: 11px; color: #60a5fa; background: #1e3a5f;
+      border: 1px solid #1d4ed8; border-radius: 4px;
+      padding: 2px 7px; cursor: default;
+    }
+
+    /* Welcome screen */
+    .welcome {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px; color: #475569; text-align: center; padding: 40px;
+    }
+    .welcome-icon { font-size: 48px; }
+    .welcome h2 { font-size: 22px; color: #94a3b8; }
+    .welcome p { font-size: 14px; max-width: 380px; line-height: 1.6; }
+    .starter-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+    .starter {
+      padding: 8px 14px; border-radius: 20px;
+      border: 1px solid #334155; background: #1e293b;
+      color: #94a3b8; font-size: 13px; cursor: pointer;
+      transition: all .2s;
+    }
+    .starter:hover { border-color: #60a5fa; color: #60a5fa; background: #1e3a5f; }
+
+    /* Input */
+    .input-area {
+      padding: 16px 24px; background: #1a2535;
+      border-top: 1px solid #334155; flex-shrink: 0;
+    }
+    .input-row {
+      display: flex; gap: 10px; align-items: flex-end;
+      background: #1e293b; border: 1px solid #334155;
+      border-radius: 12px; padding: 10px 14px;
+    }
+    .input-row:focus-within { border-color: #3b82f6; }
+    #messageInput {
+      flex: 1; background: transparent; border: none; outline: none;
+      color: #e2e8f0; font-size: 14px; font-family: inherit;
+      resize: none; max-height: 120px; line-height: 1.5;
+    }
+    #messageInput::placeholder { color: #475569; }
+    #sendBtn {
+      width: 34px; height: 34px; border-radius: 8px;
+      background: #3b82f6; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background .2s;
+    }
+    #sendBtn:hover { background: #2563eb; }
+    #sendBtn:disabled { background: #334155; cursor: not-allowed; }
+    .send-icon { width: 16px; height: 16px; fill: white; }
+
+    /* Typing indicator */
+    .typing { display: flex; gap: 4px; align-items: center; padding: 14px 16px; }
+    .typing span {
+      width: 6px; height: 6px; background: #60a5fa; border-radius: 50%;
+      animation: bounce .8s infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: .15s; }
+    .typing span:nth-child(3) { animation-delay: .3s; }
+    @keyframes bounce { 0%,80%,100% { transform: scale(.7); } 40% { transform: scale(1); } }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+    .hidden { display: none !important; }
+
+    /* ── Voice ── */
+    .mic-btn {
+      width: 34px; height: 34px; border-radius: 8px;
+      background: #334155; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all .2s; color: #94a3b8;
+      font-size: 16px;
+    }
+    .mic-btn:hover:not(:disabled) { background: #3d4f63; color: #e2e8f0; }
+    .mic-btn.listening {
+      background: #dc2626; color: white;
+      animation: mic-pulse 1.2s ease-in-out infinite;
+    }
+    .mic-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    .btn-voice-on { background: #7c3aed !important; color: white !important; border-color: #7c3aed !important; }
+    .btn-voice-on:hover { background: #6d28d9 !important; }
+
+    .voice-banner {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 14px; background: #0f172a;
+      border: 1px solid #334155; border-radius: 8px;
+      margin-bottom: 8px; font-size: 13px; color: #94a3b8;
+    }
+    .voice-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: #334155; transition: background .3s;
+    }
+    .voice-dot.listening { background: #ef4444; animation: mic-pulse 1s infinite; }
+    .voice-dot.processing { background: #f59e0b; animation: mic-pulse .8s infinite; }
+    .voice-dot.speaking { background: #22c55e; animation: mic-pulse .6s infinite; }
+
+    @keyframes mic-pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: .55; transform: scale(1.25); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="avatar">BL</div>
+    <div>
+      <div class="topbar-name">Barnes Lam</div>
+      <div class="topbar-sub" id="connectionLabel">Connecting...</div>
+    </div>
+  </div>
+  <div class="topbar-stats">
+    <div class="stat"><div class="stat-val" id="statSessions">—</div><div class="stat-lbl">Sessions</div></div>
+    <div class="stat"><div class="stat-val" id="statTranscripts">—</div><div class="stat-lbl">Transcripts</div></div>
+    <div class="stat"><div class="stat-val" id="statEmails">—</div><div class="stat-lbl">Emails</div></div>
+    <div class="stat"><div class="stat-val" id="statPodcasts">—</div><div class="stat-lbl">Podcast Eps</div></div>
+    <div class="stat"><div class="stat-val" id="statPersona">—</div><div class="stat-lbl">Persona</div></div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn btn-secondary" id="voiceToggleBtn" onclick="toggleVoiceMode()">🎙 Voice</button>
+    <button class="btn btn-secondary" onclick="openSettings()">⚙️ Settings</button>
+    <button class="btn btn-secondary" id="buildBtn" onclick="buildPersona()">Build Persona</button>
+    <button class="btn btn-primary" id="extractBtn" onclick="extract()">Sync Fathom</button>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settingsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px 32px;width:460px;max-width:95vw;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h2 style="font-size:16px;font-weight:600;">Settings</h2>
+      <button onclick="closeSettings()" style="background:none;border:none;color:#64748b;font-size:20px;cursor:pointer;line-height:1;">×</button>
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <label style="display:block;font-size:12px;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">Anthropic API Key</label>
+      <input id="cfgAnthropicKey" type="password" placeholder="sk-ant-..." autocomplete="off"
+        style="width:100%;padding:9px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;outline:none;">
+      <div id="cfgAnthropicStatus" style="font-size:11px;margin-top:4px;color:#64748b;"></div>
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <label style="display:block;font-size:12px;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">ElevenLabs API Key <span style="color:#475569;">(optional — for voice clone)</span></label>
+      <input id="cfgElevenLabsKey" type="password" placeholder="Your ElevenLabs key" autocomplete="off"
+        style="width:100%;padding:9px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;outline:none;">
+    </div>
+
+    <div style="margin-bottom:24px;">
+      <label style="display:block;font-size:12px;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">ElevenLabs Voice ID <span style="color:#475569;">(optional)</span></label>
+      <input id="cfgVoiceId" type="text" placeholder="21m00Tcm4TlvDq8ikWAM" autocomplete="off"
+        style="width:100%;padding:9px 12px;background:#0f172a;border:1px solid #334155;border-radius:6px;color:#e2e8f0;font-size:13px;outline:none;">
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="closeSettings()" style="padding:9px 18px;background:#334155;border:1px solid #475569;border-radius:6px;color:#94a3b8;font-size:13px;cursor:pointer;">Cancel</button>
+      <button onclick="saveSettings()" id="saveSettingsBtn" style="padding:9px 18px;background:#3b82f6;border:none;border-radius:6px;color:white;font-size:13px;font-weight:500;cursor:pointer;">Save Keys</button>
+    </div>
+  </div>
+</div>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-tabs">
+      <div class="tab active" data-tab="persona" onclick="switchTab('persona')">Persona</div>
+      <div class="tab" data-tab="memory" onclick="switchTab('memory')">Memory</div>
+      <div class="tab" data-tab="people" onclick="switchTab('people')">People</div>
+    </div>
+    <div class="sidebar-body">
+
+      <!-- Persona tab -->
+      <div id="tab-persona">
+        <div id="personaContent">
+          <div class="empty-msg">No persona yet.</div>
+          <div class="build-hint">After extracting sessions, click <strong>Build Persona</strong> to analyze your transcripts.</div>
+        </div>
+      </div>
+
+      <!-- Memory tab -->
+      <div id="tab-memory" class="hidden">
+        <div id="memoryContent">
+          <div class="empty-msg">No memory yet.</div>
+        </div>
+      </div>
+
+      <!-- People tab -->
+      <div id="tab-people" class="hidden">
+        <div id="peopleContent">
+          <div class="empty-msg">No data yet.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Chat -->
+  <div class="chat-area">
+    <div class="messages" id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🧠</div>
+        <h2>Ask Barnes anything</h2>
+        <p>This AI is grounded in Barnes's actual recordings. It answers from his real words, frameworks, and thinking patterns.</p>
+        <div class="starter-btns">
+          <button class="starter" onclick="sendStarter(this)">How do you approach hard decisions?</button>
+          <button class="starter" onclick="sendStarter(this)">What do you think about money?</button>
+          <button class="starter" onclick="sendStarter(this)">What's most important to you in life?</button>
+          <button class="starter" onclick="sendStarter(this)">How do you handle failure?</button>
+          <button class="starter" onclick="sendStarter(this)">What's your approach to parenting?</button>
+          <button class="starter" onclick="sendStarter(this)">What frameworks do you use?</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div id="voiceBanner" class="voice-banner hidden">
+        <div class="voice-dot" id="voiceDot"></div>
+        <span id="voiceStateLabel">Click mic to speak</span>
+      </div>
+      <div class="input-row">
+        <button id="micBtn" class="mic-btn" onclick="toggleMic()" title="Hold to speak" disabled>🎤</button>
+        <textarea id="messageInput" rows="1" placeholder="Ask Barnes anything..." onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button id="sendBtn" onclick="sendMessage()">
+          <svg class="send-icon" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const API = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:3000'
+    : '';
+  let history = [];
+  let isLoading = false;
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  window.addEventListener('load', async () => {
+    await checkConnection();
+    await loadStats();
+    await loadPersona();
+    await loadMemory();
+  });
+
+  async function checkConnection() {
+    try {
+      const r = await fetch(`${API}/health`);
+      if (r.ok) {
+        document.getElementById('connectionLabel').textContent = 'Connected';
+        document.getElementById('connectionLabel').style.color = '#22c55e';
+      }
+    } catch {
+      document.getElementById('connectionLabel').textContent = 'Server offline';
+      document.getElementById('connectionLabel').style.color = '#ef4444';
+    }
+  }
+
+  async function loadStats() {
+    try {
+      const r = await fetch(`${API}/api/stats`);
+      const d = await r.json();
+      if (d.success) {
+        document.getElementById('statSessions').textContent = d.videoCount;
+        document.getElementById('statTranscripts').textContent = d.transcriptCount;
+        document.getElementById('statEmails').textContent = d.emailCount || 0;
+        document.getElementById('statPodcasts').textContent = d.podcastCount || 0;
+        document.getElementById('statPersona').textContent = d.personaBuilt ? '✓' : '—';
+      }
+    } catch {}
+  }
+
+  // ── Tabs ────────────────────────────────────────────────────────────────────
+  function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    ['persona','memory','people'].forEach(t => {
+      document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== name);
+    });
+  }
+
+  // ── Persona ─────────────────────────────────────────────────────────────────
+  async function loadPersona() {
+    try {
+      const r = await fetch(`${API}/api/persona`);
+      const d = await r.json();
+      if (d.success && d.persona) renderPersona(d.persona);
+    } catch {}
+  }
+
+  function renderPersona(p) {
+    const el = document.getElementById('personaContent');
+    el.innerHTML = `
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Communication Style</div>
+        <div class="persona-val">${p.communicationStyle || '—'}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Core Values</div>
+        <div>${(p.coreValues || []).map(v => `<span class="pill">${v}</span>`).join('')}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Frameworks</div>
+        <div>${(p.frameworks || []).map(f => `<span class="pill">${f}</span>`).join('')}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Decision Pattern</div>
+        <div class="persona-val">${p.decisionPattern || '—'}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Recurring Themes</div>
+        <div>${(p.recurringThemes || []).map(t => `<span class="pill">${t}</span>`).join('')}</div>
+      </div>
+      <div style="font-size:11px;color:#475569;margin-top:8px;">Built ${p.builtAt ? new Date(p.builtAt).toLocaleDateString() : '—'}</div>
+    `;
+  }
+
+  async function loadMemory() {
+    try {
+      const r = await fetch(`${API}/api/memory`);
+      const d = await r.json();
+      if (d.success && d.memory) {
+        renderMemory(d.memory);
+        renderPeople(d.memory);
+      }
+    } catch {}
+  }
+
+  function renderMemory(m) {
+    const el = document.getElementById('memoryContent');
+    const topics = (m.topTopics || []).map(t => `
+      <div class="topic-row">
+        <div class="topic-name">${t.topic} <span style="color:#64748b;font-size:11px;">(${t.frequency})</span></div>
+        <div class="topic-desc">${t.description || ''}</div>
+      </div>`).join('');
+    el.innerHTML = `
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Thinking Evolution</div>
+        <div class="persona-val">${m.thinkingEvolution || '—'}</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Top Topics</div>
+        ${topics || '<div class="empty-msg">None yet</div>'}
+      </div>
+    `;
+  }
+
+  function renderPeople(m) {
+    const el = document.getElementById('peopleContent');
+    const people = (m.topPeople || []).map(p => `
+      <div class="person-row">
+        <span>${p.name}</span>
+        <span class="person-count">${p.meetingCount} meetings</span>
+      </div>`).join('');
+    const rels = (m.keyRelationships || []).map(r => `
+      <div class="topic-row">
+        <div class="topic-name">${r.name}</div>
+        <div class="topic-desc">${r.context || ''}</div>
+      </div>`).join('');
+    el.innerHTML = `
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Most Frequent</div>
+        ${people || '<div class="empty-msg">None yet</div>'}
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-heading">Key Relationships</div>
+        ${rels || '<div class="empty-msg">None yet</div>'}
+      </div>
+    `;
+  }
+
+  // ── Actions ─────────────────────────────────────────────────────────────────
+  async function extract() {
+    const btn = document.getElementById('extractBtn');
+    btn.disabled = true; btn.textContent = 'Syncing...';
+    try {
+      const r = await fetch(`${API}/api/extract`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+      const d = await r.json();
+      if (d.success) {
+        await loadStats();
+        showNotice(`Synced ${d.sessionCount} sessions (${d.withTranscript} with transcripts). Building persona in background...`);
+        setTimeout(async () => { await loadPersona(); await loadMemory(); await loadStats(); }, 8000);
+      } else {
+        showNotice('Error: ' + d.error, true);
+      }
+    } catch(e) { showNotice('Error: ' + e.message, true); }
+    btn.disabled = false; btn.textContent = 'Sync Fathom';
+  }
+
+  async function buildPersona() {
+    const btn = document.getElementById('buildBtn');
+    btn.disabled = true; btn.textContent = 'Building...';
+    try {
+      const r = await fetch(`${API}/api/build-persona`, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        if (d.persona) renderPersona(d.persona);
+        if (d.memory)  { renderMemory(d.memory); renderPeople(d.memory); }
+        await loadStats();
+        showNotice('Persona and memory built.');
+      } else {
+        showNotice('Error: ' + d.error, true);
+      }
+    } catch(e) { showNotice('Error: ' + e.message, true); }
+    btn.disabled = false; btn.textContent = 'Build Persona';
+  }
+
+  // ── Chat ────────────────────────────────────────────────────────────────────
+  function sendStarter(btn) {
+    document.getElementById('messageInput').value = btn.textContent;
+    sendMessage();
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  }
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    if (!message || isLoading) return;
+
+    document.getElementById('welcome')?.remove();
+    isLoading = true;
+    input.value = ''; input.style.height = 'auto';
+    document.getElementById('sendBtn').disabled = true;
+
+    appendMsg('user', message);
+    const typingId = appendTyping();
+
+    try {
+      const r = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ message, history })
+      });
+      const d = await r.json();
+      removeTyping(typingId);
+
+      if (d.success) {
+        appendMsg('assistant', d.answer, d.sources);
+        history.push({ role: 'user', content: message });
+        history.push({ role: 'assistant', content: d.answer });
+        if (history.length > 12) history = history.slice(-12);
+      } else {
+        appendMsg('assistant', 'Error: ' + d.error);
+      }
+    } catch(e) {
+      removeTyping(typingId);
+      appendMsg('assistant', 'Error connecting to server. Is it running?');
+    }
+
+    isLoading = false;
+    document.getElementById('sendBtn').disabled = false;
+    input.focus();
+  }
+
+  function appendMsg(role, text, sources) {
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+
+    const initials = role === 'user' ? 'You' : 'BL';
+    const sourcesHTML = sources?.length ? `
+      <div class="msg-sources">
+        ${sources.map(s => {
+          if (s.type === 'website')
+            return `<span class="source-chip" style="background:#1e2a3a;border-color:#0369a1" title="${s.title}">🌐 ${s.title}</span>`;
+          if (s.type === 'email')
+            return `<span class="source-chip" style="background:#1e3a2a;border-color:#166534" title="${s.date} → ${s.to}">✉ ${s.title}</span>`;
+          if (s.type === 'podcast')
+            return `<span class="source-chip" style="background:#2a1e3a;border-color:#6d28d9" title="${s.podcast} • ${s.date}">🎙 ${s.title}</span>`;
+          return `<span class="source-chip" title="${s.date}">📹 ${s.title}</span>`;
+        }).join('')}
+      </div>` : '';
+
+    div.innerHTML = `
+      <div class="msg-avatar">${initials}</div>
+      <div class="msg-body">
+        <div class="msg-bubble">${escHtml(text).replace(/\n/g, '<br>')}</div>
+        ${sourcesHTML}
+      </div>`;
+
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return div;
+  }
+
+  function appendTyping() {
+    const msgs = document.getElementById('messages');
+    const id = 'typing-' + Date.now();
+    const div = document.createElement('div');
+    div.id = id; div.className = 'msg assistant';
+    div.innerHTML = `
+      <div class="msg-avatar">BL</div>
+      <div class="msg-body"><div class="msg-bubble"><div class="typing"><span></span><span></span><span></span></div></div></div>`;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return id;
+  }
+
+  function removeTyping(id) {
+    document.getElementById(id)?.remove();
+  }
+
+  function showNotice(msg, isError) {
+    const msgs = document.getElementById('messages');
+    document.getElementById('welcome')?.remove();
+    const div = document.createElement('div');
+    div.style.cssText = `text-align:center;font-size:13px;color:${isError?'#f87171':'#86efac'};padding:8px;`;
+    div.textContent = msg;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    setTimeout(() => div.remove(), 5000);
+  }
+
+  function escHtml(t) {
+    return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Voice ────────────────────────────────────────────────────────────────────
+  let voiceMode = false;
+  let voiceState = 'idle'; // idle | listening | processing | speaking
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let currentAudio = null;
+
+  function toggleVoiceMode() {
+    voiceMode = !voiceMode;
+    const toggleBtn = document.getElementById('voiceToggleBtn');
+    const micBtn = document.getElementById('micBtn');
+
+    if (voiceMode) {
+      toggleBtn.textContent = '🎙 Voice On';
+      toggleBtn.classList.add('btn-voice-on');
+      toggleBtn.classList.remove('btn-secondary');
+      document.getElementById('voiceBanner').classList.remove('hidden');
+      micBtn.disabled = false;
+      setVoiceState('idle');
+    } else {
+      toggleBtn.textContent = '🎙 Voice';
+      toggleBtn.classList.remove('btn-voice-on');
+      toggleBtn.classList.add('btn-secondary');
+      document.getElementById('voiceBanner').classList.add('hidden');
+      micBtn.disabled = true;
+      stopListeningCleanup();
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      setVoiceState('idle');
+    }
+  }
+
+  function setVoiceState(state) {
+    voiceState = state;
+    const dot = document.getElementById('voiceDot');
+    const label = document.getElementById('voiceStateLabel');
+    const micBtn = document.getElementById('micBtn');
+
+    dot.className = 'voice-dot ' + (state !== 'idle' ? state : '');
+    label.textContent = { idle: 'Click mic to speak', listening: 'Listening…', processing: 'Thinking…', speaking: 'Speaking…' }[state] || state;
+
+    if (micBtn) {
+      micBtn.className = 'mic-btn' + (state === 'listening' ? ' listening' : '');
+      micBtn.disabled = (state === 'processing' || state === 'speaking');
+    }
+  }
+
+  async function toggleMic() {
+    if (!voiceMode) return;
+    if (voiceState === 'listening') {
+      stopListeningCleanup();
+    } else if (voiceState === 'idle') {
+      await startListening();
+    }
+  }
+
+  async function startListening() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+
+      // Pick a supported mimeType
+      const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/ogg','audio/mp4','']
+        .find(t => !t || MediaRecorder.isTypeSupported(t)) || '';
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        processAudio(mediaRecorder.mimeType || 'audio/webm');
+      };
+      mediaRecorder.start();
+      setVoiceState('listening');
+    } catch(e) {
+      showNotice('Mic access error: ' + e.message, true);
+    }
+  }
+
+  function stopListeningCleanup() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    else setVoiceState('idle');
+  }
+
+  async function processAudio(mimeType) {
+    if (!audioChunks.length) { setVoiceState('idle'); return; }
+    setVoiceState('processing');
+
+    const blob = new Blob(audioChunks, { type: mimeType });
+
+    try {
+      const r = await fetch(`${API}/api/transcribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': mimeType },
+        body: blob
+      });
+      const d = await r.json();
+
+      if (!d.success || !d.transcript?.trim()) {
+        showNotice('Didn\'t catch that — try again.', true);
+        setVoiceState('idle');
+        return;
+      }
+
+      document.getElementById('messageInput').value = d.transcript.trim();
+      await sendVoiceMessage(d.transcript.trim());
+
+    } catch(e) {
+      showNotice('Voice error: ' + e.message, true);
+      setVoiceState('idle');
+    }
+  }
+
+  async function sendVoiceMessage(message) {
+    if (!message || isLoading) { setVoiceState('idle'); return; }
+
+    document.getElementById('welcome')?.remove();
+    isLoading = true;
+    const input = document.getElementById('messageInput');
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('sendBtn').disabled = true;
+
+    appendMsg('user', message);
+    const typingId = appendTyping();
+
+    try {
+      const r = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, history })
+      });
+      const d = await r.json();
+      removeTyping(typingId);
+
+      if (d.success) {
+        appendMsg('assistant', d.answer, d.sources);
+        history.push({ role: 'user', content: message });
+        history.push({ role: 'assistant', content: d.answer });
+        if (history.length > 12) history = history.slice(-12);
+        if (voiceMode) await speakResponse(d.answer);
+        else setVoiceState('idle');
+      } else {
+        appendMsg('assistant', 'Error: ' + d.error);
+        setVoiceState('idle');
+      }
+    } catch(e) {
+      removeTyping(typingId);
+      appendMsg('assistant', 'Error connecting to server.');
+      setVoiceState('idle');
+    }
+
+    isLoading = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+
+  async function speakResponse(text) {
+    setVoiceState('speaking');
+    try {
+      const r = await fetch(`${API}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+
+      if (r.status === 501) { speakBrowser(text); return; } // no key yet
+      if (!r.ok) throw new Error('TTS ' + r.status);
+
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      currentAudio = new Audio(url);
+      currentAudio.onended = () => { setVoiceState('idle'); URL.revokeObjectURL(url); currentAudio = null; };
+      currentAudio.onerror = () => { setVoiceState('idle'); currentAudio = null; };
+      await currentAudio.play();
+    } catch(e) {
+      console.warn('ElevenLabs TTS failed, falling back to browser:', e.message);
+      speakBrowser(text);
+    }
+  }
+
+  function speakBrowser(text) {
+    if (!('speechSynthesis' in window)) { setVoiceState('idle'); return; }
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 0.95; utt.pitch = 1;
+    utt.onend = () => setVoiceState('idle');
+    utt.onerror = () => setVoiceState('idle');
+    window.speechSynthesis.speak(utt);
+  }
+
+  // ── Settings modal ─────────────────────────────────────────────────────────
+  async function openSettings() {
+    const modal = document.getElementById('settingsModal');
+    modal.style.display = 'flex';
+    // Load current config to show status
+    try {
+      const r = await fetch(`${API}/api/config`);
+      const d = await r.json();
+      if (d.anthropicSet) {
+        document.getElementById('cfgAnthropicStatus').textContent = `Currently set (ends …${d.anthropicApiKey.slice(-4)})`;
+        document.getElementById('cfgAnthropicStatus').style.color = '#4ade80';
+      } else {
+        document.getElementById('cfgAnthropicStatus').textContent = 'Not set — required for Build Persona and Chat';
+        document.getElementById('cfgAnthropicStatus').style.color = '#f87171';
+      }
+      if (d.elevenLabsVoiceId) document.getElementById('cfgVoiceId').value = d.elevenLabsVoiceId;
+    } catch {}
+  }
+
+  function closeSettings() {
+    document.getElementById('settingsModal').style.display = 'none';
+    document.getElementById('cfgAnthropicKey').value = '';
+    document.getElementById('cfgElevenLabsKey').value = '';
+  }
+
+  async function saveSettings() {
+    const btn = document.getElementById('saveSettingsBtn');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    const body = {};
+    const ak = document.getElementById('cfgAnthropicKey').value.trim();
+    const ek = document.getElementById('cfgElevenLabsKey').value.trim();
+    const vid = document.getElementById('cfgVoiceId').value.trim();
+    if (ak)  body.anthropicApiKey   = ak;
+    if (ek)  body.elevenLabsApiKey  = ek;
+    if (vid) body.elevenLabsVoiceId = vid;
+    try {
+      const r = await fetch(`${API}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.success) {
+        showNotice('Keys saved. You can now Build Persona and use Chat.');
+        closeSettings();
+      } else {
+        showNotice('Save failed', true);
+      }
+    } catch(e) { showNotice('Error: ' + e.message, true); }
+    btn.disabled = false; btn.textContent = 'Save Keys';
+  }
+
+  // Close modal on backdrop click
+  document.getElementById('settingsModal').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('settingsModal')) closeSettings();
+  });
+</script>
+</body>
+</html>
