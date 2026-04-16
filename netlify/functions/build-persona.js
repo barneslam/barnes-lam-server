@@ -1,5 +1,6 @@
 'use strict';
 const { ok, err, preflight, loadSessions, loadEmails, savePersona, saveMemory, callClaude } = require('./_lib');
+// Note: preflight is imported above — do not re-declare it below
 
 async function buildPersona(sessions, emails) {
   const barnesSpeech = sessions
@@ -86,4 +87,3 @@ exports.handler = async (event) => {
   } catch(e) { return err(e.message); }
 };
 
-function preflight() { return { statusCode: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS' }, body: '' }; }
