@@ -272,7 +272,8 @@
   </div>
   <div class="topbar-actions">
     <button class="btn btn-secondary" id="voiceToggleBtn" onclick="toggleVoiceMode()">🎙 Voice</button>
-    <button class="btn btn-secondary" id="adminBtn" onclick="toggleAdminPanel()" title="Admin tools">⚙</button>
+    <button class="btn btn-secondary" onclick="openSettings()" title="Settings">⚙ Settings</button>
+    <button class="btn btn-secondary" id="adminBtn" onclick="toggleAdminPanel()" title="Admin tools">⋯</button>
   </div>
   <!-- Admin panel (hidden by default) -->
   <div id="adminPanel" style="display:none;gap:8px;align-items:center;margin-left:8px;flex-wrap:wrap;">
@@ -280,6 +281,16 @@
     <button class="btn btn-secondary" id="extractBtn" onclick="extract()">Find New Data</button>
     <button class="btn btn-secondary" id="addEmailsBtn" onclick="openAddEmailsModal()" title="Add emails from any address">+ Emails</button>
   </div>
+  <!-- Sync progress bar (shown during Find New Data) -->
+  <div id="syncProgressWrap" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;">
+    <div style="height:3px;background:#1e293b;width:100%;">
+      <div id="syncProgressBar" style="height:3px;background:linear-gradient(90deg,#3b82f6,#60a5fa,#3b82f6);background-size:200% 100%;width:0%;transition:width 0.4s ease;animation:shimmer 1.4s infinite linear;"></div>
+    </div>
+    <div id="syncProgressLabel" style="background:#1e293b;color:#94a3b8;font-size:11px;padding:4px 12px;display:inline-block;border-radius:0 0 6px 0;">Syncing...</div>
+  </div>
+  <style>
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
 
   <!-- Add Emails Modal -->
   <div id="addEmailsModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center;">
@@ -623,10 +634,39 @@
   // ── Actions ─────────────────────────────────────────────────────────────────
   async function extract() {
     const btn = document.getElementById('extractBtn');
-    btn.disabled = true; btn.textContent = 'Finding new data...';
+    const wrap = document.getElementById('syncProgressWrap');
+    const bar  = document.getElementById('syncProgressBar');
+    const lbl  = document.getElementById('syncProgressLabel');
+
+    btn.disabled = true; btn.textContent = 'Syncing...';
+    wrap.style.display = 'block';
+    bar.style.width = '0%';
+
+    // Simulate progress: creep to 85% over ~50s, then jump to 100% on done
+    const steps = [
+      [5,  500,  'Connecting to Fathom...'],
+      [20, 4000, 'Pulling sessions...'],
+      [40, 8000, 'Fetching transcripts...'],
+      [60, 8000, 'Syncing Gmail...'],
+      [75, 6000, 'Syncing Gmail (2nd account)...'],
+      [85, 5000, 'Finalising...'],
+    ];
+    let stepIdx = 0;
+    const advance = () => {
+      if (stepIdx >= steps.length) return;
+      const [pct, delay, msg] = steps[stepIdx++];
+      bar.style.width = pct + '%';
+      lbl.textContent = msg;
+      setTimeout(advance, delay);
+    };
+    advance();
+
     try {
       const r = await fetch(`${API}/api/sync-all`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
       const d = await r.json();
+      bar.style.width = '100%';
+      lbl.textContent = 'Done!';
+      setTimeout(() => { wrap.style.display = 'none'; bar.style.width = '0%'; }, 1200);
       if (d.success) {
         await loadStats();
         const parts = [
@@ -635,12 +675,18 @@
           `${d.podcasts} podcasts`,
           `${d.website} website pages`
         ];
-        showNotice(`Found: ${parts.join(' · ')}. Building persona in background...`);
+        showNotice(`Found: ${parts.join(' · ')}. Persona rebuilding in background...`);
         setTimeout(async () => { await loadPersona(); await loadMemory(); await loadStats(); }, 8000);
       } else {
         showNotice('Error: ' + d.error, true);
       }
-    } catch(e) { showNotice('Error: ' + e.message, true); }
+    } catch(e) {
+      bar.style.width = '100%';
+      bar.style.background = '#ef4444';
+      lbl.textContent = 'Error';
+      setTimeout(() => { wrap.style.display = 'none'; bar.style.width = '0%'; bar.style.background = ''; }, 2000);
+      showNotice('Error: ' + e.message, true);
+    }
     btn.disabled = false; btn.textContent = 'Find New Data';
   }
 

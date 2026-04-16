@@ -73,40 +73,44 @@ async function dbSave(key, data) {
   });
 }
 
-// ─── Config file (API keys stay local — never in the cloud DB) ───────────────
-const DATA_DIR   = path.join(__dirname, 'data');
-const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+// ─── Config — env vars (primary) + Supabase fallback for runtime overrides ────
+// API keys:    set as env vars in Railway/Fly dashboard (or via Settings modal → saved to Supabase)
+// Gmail tokens: always stored in Supabase (oauth tokens change on every refresh)
 
 async function initDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  try {
-    const cfg = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf-8'));
-    if (cfg.anthropicApiKey)    ANTHROPIC_API_KEY    = cfg.anthropicApiKey;
-    if (cfg.elevenLabsApiKey)   ELEVENLABS_API_KEY   = cfg.elevenLabsApiKey;
-    if (cfg.elevenLabsVoiceId)  ELEVENLABS_VOICE_ID  = cfg.elevenLabsVoiceId;
-    if (cfg.googleClientId)     GOOGLE_CLIENT_ID     = cfg.googleClientId;
-    if (cfg.googleClientSecret) GOOGLE_CLIENT_SECRET = cfg.googleClientSecret;
-    if (cfg.gmailTokens)        gmailTokens          = cfg.gmailTokens;
-  } catch { /* no config yet */ }
+  // Load runtime config from Supabase (overrides env vars only if env var is empty)
+  const cfg = await dbLoad('runtime_config', {});
+  if (!ANTHROPIC_API_KEY    && cfg.anthropicApiKey)    ANTHROPIC_API_KEY    = cfg.anthropicApiKey;
+  if (!ELEVENLABS_API_KEY   && cfg.elevenLabsApiKey)   ELEVENLABS_API_KEY   = cfg.elevenLabsApiKey;
+  if (cfg.elevenLabsVoiceId)                           ELEVENLABS_VOICE_ID  = cfg.elevenLabsVoiceId;
+  if (!GOOGLE_CLIENT_ID     && cfg.googleClientId)     GOOGLE_CLIENT_ID     = cfg.googleClientId;
+  if (!GOOGLE_CLIENT_SECRET && cfg.googleClientSecret) GOOGLE_CLIENT_SECRET = cfg.googleClientSecret;
+  // Gmail OAuth tokens always come from Supabase
+  const savedTokens = await dbLoad('gmail_tokens', {});
+  if (savedTokens && typeof savedTokens === 'object') gmailTokens = savedTokens;
+  console.log(`Config loaded. Gmail accounts: ${Object.keys(gmailTokens).join(', ') || 'none'}`);
 }
 
 async function persistConfig() {
+  // Save runtime config overrides to Supabase
   const cfg = {};
   if (ANTHROPIC_API_KEY)    cfg.anthropicApiKey    = ANTHROPIC_API_KEY;
   if (ELEVENLABS_API_KEY)   cfg.elevenLabsApiKey   = ELEVENLABS_API_KEY;
   if (ELEVENLABS_VOICE_ID)  cfg.elevenLabsVoiceId  = ELEVENLABS_VOICE_ID;
   if (GOOGLE_CLIENT_ID)     cfg.googleClientId     = GOOGLE_CLIENT_ID;
   if (GOOGLE_CLIENT_SECRET) cfg.googleClientSecret = GOOGLE_CLIENT_SECRET;
-  if (Object.keys(gmailTokens).length) cfg.gmailTokens = gmailTokens;
-  await save(CONFIG_FILE, cfg);
+  await dbSave('runtime_config', cfg);
+  // Gmail tokens saved separately
+  if (Object.keys(gmailTokens).length) await dbSave('gmail_tokens', gmailTokens);
 }
 
-// Local file helpers — only used for config.json
+// Kept for any legacy local reads
 async function load(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf-8')); }
   catch { return fallback; }
 }
 async function save(file, data) {
+  try { await fs.mkdir(path.dirname(file), { recursive: true }); } catch {}
   await fs.writeFile(file, JSON.stringify(data, null, 2));
 }
 
@@ -117,13 +121,15 @@ async function fetchFathomPage(cursor) {
     if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
     const req = https.request(
       { hostname: 'api.fathom.ai', port: 443, path: url, method: 'GET',
-        headers: { 'X-Api-Key': FATHOM_API_KEY } },
+        headers: { 'X-Api-Key': FATHOM_API_KEY },
+        timeout: 15000 },
       (res) => {
         let data = '';
         res.on('data', c => data += c);
         res.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
       }
     );
+    req.on('timeout', () => { req.destroy(); reject(new Error('Fathom API timeout')); });
     req.on('error', reject);
     req.end();
   });
@@ -1115,6 +1121,17 @@ async function start() {
   POST /api/search         Search transcripts
   GET  /api/stats          System stats
     `);
+
+    // ── Auto-sync every 4 hours ───────────────────────────────────────────────
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    setInterval(() => {
+      console.log(`[auto-sync] Running scheduled sync at ${new Date().toISOString()}`);
+      syncAll({ httpMethod: 'POST' }, {
+        json: (data) => console.log(`[auto-sync] Done:`, JSON.stringify(data)),
+        status: () => ({ json: (d) => console.error('[auto-sync] Error:', d) })
+      }).catch(e => console.error('[auto-sync] Failed:', e.message));
+    }, FOUR_HOURS);
+    console.log(`[auto-sync] Scheduled every 4 hours`);
   });
 }
 
