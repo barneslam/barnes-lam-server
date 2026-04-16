@@ -13,9 +13,12 @@ const FATHOM_API_KEY = process.env.FATHOM_API_KEY || '2aPN-Af79yOWj-PAIdGH1A.YjI
 const DEEPGRAM_API_KEY   = process.env.DEEPGRAM_API_KEY   || '91fd82f8ab74a50a0784babd083ff9a24f18fdab';
 
 // Mutable keys — can be updated at runtime via POST /api/config
-let ANTHROPIC_API_KEY  = process.env.ANTHROPIC_API_KEY  || '';
+let ANTHROPIC_API_KEY   = process.env.ANTHROPIC_API_KEY   || '';
 let ELEVENLABS_API_KEY  = process.env.ELEVENLABS_API_KEY  || '';
 let ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+let GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID     || '';
+let GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+let gmailTokens = {}; // { email: { accessToken, refreshToken, expiresAt } }
 
 app.use(cors());
 app.use(express.json());
@@ -76,13 +79,26 @@ const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 async function initDataDir() {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  // Load persisted config (API keys saved via the UI)
   try {
     const cfg = JSON.parse(await fs.readFile(CONFIG_FILE, 'utf-8'));
-    if (cfg.anthropicApiKey)   ANTHROPIC_API_KEY   = cfg.anthropicApiKey;
-    if (cfg.elevenLabsApiKey)  ELEVENLABS_API_KEY  = cfg.elevenLabsApiKey;
-    if (cfg.elevenLabsVoiceId) ELEVENLABS_VOICE_ID = cfg.elevenLabsVoiceId;
-  } catch { /* no config yet, use env defaults */ }
+    if (cfg.anthropicApiKey)    ANTHROPIC_API_KEY    = cfg.anthropicApiKey;
+    if (cfg.elevenLabsApiKey)   ELEVENLABS_API_KEY   = cfg.elevenLabsApiKey;
+    if (cfg.elevenLabsVoiceId)  ELEVENLABS_VOICE_ID  = cfg.elevenLabsVoiceId;
+    if (cfg.googleClientId)     GOOGLE_CLIENT_ID     = cfg.googleClientId;
+    if (cfg.googleClientSecret) GOOGLE_CLIENT_SECRET = cfg.googleClientSecret;
+    if (cfg.gmailTokens)        gmailTokens          = cfg.gmailTokens;
+  } catch { /* no config yet */ }
+}
+
+async function persistConfig() {
+  const cfg = {};
+  if (ANTHROPIC_API_KEY)    cfg.anthropicApiKey    = ANTHROPIC_API_KEY;
+  if (ELEVENLABS_API_KEY)   cfg.elevenLabsApiKey   = ELEVENLABS_API_KEY;
+  if (ELEVENLABS_VOICE_ID)  cfg.elevenLabsVoiceId  = ELEVENLABS_VOICE_ID;
+  if (GOOGLE_CLIENT_ID)     cfg.googleClientId     = GOOGLE_CLIENT_ID;
+  if (GOOGLE_CLIENT_SECRET) cfg.googleClientSecret = GOOGLE_CLIENT_SECRET;
+  if (Object.keys(gmailTokens).length) cfg.gmailTokens = gmailTokens;
+  await save(CONFIG_FILE, cfg);
 }
 
 // Local file helpers — only used for config.json
@@ -151,6 +167,120 @@ function fathomToSession(m) {
     shareUrl: m.share_url || '',
     fathomUrl: m.url || ''
   };
+}
+
+// ─── Google OAuth + Gmail API ─────────────────────────────────────────────────
+function googleAuthUrl(accountHint, redirectUri) {
+  const p = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/gmail.readonly',
+    access_type: 'offline',
+    prompt: 'consent',
+    login_hint: accountHint || ''
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
+}
+
+function googleTokenRequest(params) {
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams(params).toString();
+    const req = https.request({
+      hostname: 'oauth2.googleapis.com', port: 443,
+      path: '/token', method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
+    }, (res) => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const r = JSON.parse(d);
+          if (r.error) reject(new Error(r.error_description || r.error));
+          else resolve(r);
+        } catch(e) { reject(e); }
+      });
+    });
+    req.on('error', reject); req.write(body); req.end();
+  });
+}
+
+async function refreshGmailToken(email) {
+  const tok = gmailTokens[email];
+  if (!tok?.refreshToken) throw new Error(`No refresh token for ${email}`);
+  const r = await googleTokenRequest({
+    refresh_token: tok.refreshToken,
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    grant_type: 'refresh_token'
+  });
+  gmailTokens[email] = { ...tok, accessToken: r.access_token, expiresAt: Date.now() + r.expires_in * 1000 };
+  persistConfig().catch(console.error);
+}
+
+async function getGmailToken(email) {
+  const tok = gmailTokens[email];
+  if (!tok) throw new Error(`Gmail not connected: ${email}`);
+  if (Date.now() > tok.expiresAt - 60000) await refreshGmailToken(email);
+  return gmailTokens[email].accessToken;
+}
+
+function gmailGet(accessToken, endpoint) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'gmail.googleapis.com', port: 443,
+      path: '/gmail/v1/users/me/' + endpoint, method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + accessToken }
+    }, (res) => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
+    });
+    req.on('error', reject); req.end();
+  });
+}
+
+function extractGmailBody(payload) {
+  if (!payload) return '';
+  if (payload.body?.data) return Buffer.from(payload.body.data, 'base64url').toString('utf-8');
+  for (const part of (payload.parts || [])) {
+    if (part.mimeType === 'text/plain' && part.body?.data)
+      return Buffer.from(part.body.data, 'base64url').toString('utf-8');
+    for (const nested of (part.parts || [])) {
+      if (nested.mimeType === 'text/plain' && nested.body?.data)
+        return Buffer.from(nested.body.data, 'base64url').toString('utf-8');
+    }
+  }
+  return '';
+}
+
+async function fetchGmailSentEmails(email) {
+  const accessToken = await getGmailToken(email);
+  const listRes = await gmailGet(accessToken, 'messages?q=in%3Asent+-from%3Anoreply+-from%3Ano-reply&maxResults=100');
+  const msgList = listRes.messages || [];
+  console.log(`  Gmail ${email}: ${msgList.length} sent messages found`);
+  const emails = [];
+  for (let i = 0; i < Math.min(msgList.length, 100); i += 5) {
+    const batch = msgList.slice(i, i + 5);
+    const results = await Promise.all(batch.map(m => gmailGet(accessToken, `messages/${m.id}?format=full`)));
+    for (const msg of results) {
+      const hdrs = {};
+      for (const h of (msg.payload?.headers || [])) hdrs[h.name.toLowerCase()] = h.value;
+      const rawBody = extractGmailBody(msg.payload);
+      // Strip quoted lines and "On ... wrote:" lines
+      const bodyClean = rawBody.split('\n')
+        .filter(l => !l.trim().startsWith('>') && !/^On .{10,80} wrote:/.test(l.trim()))
+        .join('\n').replace(/\r/g, '').trim();
+      if (bodyClean.length < 30) continue;
+      emails.push({
+        id: `gmail-${msg.id}`,
+        subject: hdrs.subject || '(no subject)',
+        to:   hdrs.to   || '',
+        from: hdrs.from || email,
+        date: hdrs.date || '',
+        body: bodyClean.substring(0, 2000)
+      });
+    }
+  }
+  return emails;
 }
 
 // ─── Claude ───────────────────────────────────────────────────────────────────
@@ -602,9 +732,31 @@ async function syncAll(req, res) {
     await dbSave('sessions', merged);
     console.log(`Sessions: ${merged.length} total (${newCount} new)`);
 
+    // ── Gmail sync for each connected account ─────────────────────────────────
+    let existingEmails = await dbLoad('emails', []);
+    const existingEmailIds = new Set(existingEmails.map(e => e.id));
+    let newEmailCount = 0;
+    const gmailErrors = [];
+    for (const gmailAccount of Object.keys(gmailTokens)) {
+      try {
+        console.log(`Syncing Gmail: ${gmailAccount}...`);
+        const pulled = await fetchGmailSentEmails(gmailAccount);
+        const fresh = pulled.filter(e => !existingEmailIds.has(e.id));
+        if (fresh.length) {
+          existingEmails = [...existingEmails, ...fresh];
+          for (const e of fresh) existingEmailIds.add(e.id);
+          newEmailCount += fresh.length;
+          console.log(`  Gmail ${gmailAccount}: ${fresh.length} new emails`);
+        }
+      } catch(e) {
+        console.error(`Gmail sync error (${gmailAccount}):`, e.message);
+        gmailErrors.push(`${gmailAccount}: ${e.message}`);
+      }
+    }
+    if (newEmailCount > 0) await dbSave('emails', existingEmails);
+
     // ── Load counts from all other sources ────────────────────────────────────
-    const [emails, podcasts, website] = await Promise.all([
-      dbLoad('emails', []),
+    const [podcasts, website] = await Promise.all([
       dbLoad('podcasts', []),
       dbLoad('website', [])
     ]);
@@ -615,10 +767,13 @@ async function syncAll(req, res) {
 
     res.json({
       success: true,
-      sessions: { total: merged.length, newCount, withTranscript: merged.filter(s => s.transcript).length },
-      emails: emails.length,
-      podcasts: podcasts.length,
-      website: website.length,
+      sessions:  { total: merged.length, newCount, withTranscript: merged.filter(s => s.transcript).length },
+      emails:    existingEmails.length,
+      newEmails: newEmailCount,
+      podcasts:  podcasts.length,
+      website:   website.length,
+      gmailAccounts: Object.keys(gmailTokens),
+      ...(gmailErrors.length && { gmailErrors }),
       message: 'Sync complete. Persona and memory rebuilding in background.'
     });
   } catch(e) {
@@ -657,26 +812,78 @@ app.get('/api/memory', async (req, res) => {
 app.get('/api/config', (req, res) => {
   res.json({
     success: true,
-    anthropicApiKey:   ANTHROPIC_API_KEY   ? '••••' + ANTHROPIC_API_KEY.slice(-4)   : '',
-    elevenLabsApiKey:  ELEVENLABS_API_KEY  ? '••••' + ELEVENLABS_API_KEY.slice(-4)  : '',
-    elevenLabsVoiceId: ELEVENLABS_VOICE_ID,
-    anthropicSet:   !!ANTHROPIC_API_KEY,
-    elevenLabsSet:  !!ELEVENLABS_API_KEY,
+    anthropicApiKey:    ANTHROPIC_API_KEY   ? '••••' + ANTHROPIC_API_KEY.slice(-4)   : '',
+    elevenLabsApiKey:   ELEVENLABS_API_KEY  ? '••••' + ELEVENLABS_API_KEY.slice(-4)  : '',
+    elevenLabsVoiceId:  ELEVENLABS_VOICE_ID,
+    anthropicSet:       !!ANTHROPIC_API_KEY,
+    elevenLabsSet:      !!ELEVENLABS_API_KEY,
+    googleClientId:     GOOGLE_CLIENT_ID    ? '••••' + GOOGLE_CLIENT_ID.slice(-6)    : '',
+    googleConfigured:   !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
+    gmailAccounts:      Object.keys(gmailTokens),
   });
 });
 
 app.post('/api/config', async (req, res) => {
-  const { anthropicApiKey, elevenLabsApiKey, elevenLabsVoiceId } = req.body;
-  if (anthropicApiKey   !== undefined) ANTHROPIC_API_KEY   = anthropicApiKey;
-  if (elevenLabsApiKey  !== undefined) ELEVENLABS_API_KEY  = elevenLabsApiKey;
-  if (elevenLabsVoiceId !== undefined) ELEVENLABS_VOICE_ID = elevenLabsVoiceId;
-  // Persist so keys survive server restarts
-  const cfg = {};
-  if (ANTHROPIC_API_KEY)   cfg.anthropicApiKey   = ANTHROPIC_API_KEY;
-  if (ELEVENLABS_API_KEY)  cfg.elevenLabsApiKey  = ELEVENLABS_API_KEY;
-  if (ELEVENLABS_VOICE_ID) cfg.elevenLabsVoiceId = ELEVENLABS_VOICE_ID;
-  await save(CONFIG_FILE, cfg);
-  res.json({ success: true, anthropicSet: !!ANTHROPIC_API_KEY, elevenLabsSet: !!ELEVENLABS_API_KEY });
+  const { anthropicApiKey, elevenLabsApiKey, elevenLabsVoiceId, googleClientId, googleClientSecret } = req.body;
+  if (anthropicApiKey    !== undefined) ANTHROPIC_API_KEY    = anthropicApiKey;
+  if (elevenLabsApiKey   !== undefined) ELEVENLABS_API_KEY   = elevenLabsApiKey;
+  if (elevenLabsVoiceId  !== undefined) ELEVENLABS_VOICE_ID  = elevenLabsVoiceId;
+  if (googleClientId     !== undefined) GOOGLE_CLIENT_ID     = googleClientId;
+  if (googleClientSecret !== undefined) GOOGLE_CLIENT_SECRET = googleClientSecret;
+  await persistConfig();
+  res.json({ success: true, anthropicSet: !!ANTHROPIC_API_KEY, elevenLabsSet: !!ELEVENLABS_API_KEY, googleConfigured: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) });
+});
+
+// ── Gmail OAuth endpoints ─────────────────────────────────────────────────────
+app.get('/api/gmail/auth', (req, res) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)
+    return res.status(400).send('Google credentials not configured. Add them in Settings first.');
+  const account = req.query.account || '';
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/gmail/callback`;
+  res.redirect(googleAuthUrl(account, redirectUri));
+});
+
+app.get('/api/gmail/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.send('<h2>Error: no authorization code received.</h2>');
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/gmail/callback`;
+  try {
+    const tokens = await googleTokenRequest({
+      code,
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code'
+    });
+    // Get email address from Google
+    const profile = await gmailGet(tokens.access_token, 'profile');
+    const email = profile.emailAddress;
+    gmailTokens[email] = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt: Date.now() + (tokens.expires_in || 3600) * 1000
+    };
+    await persistConfig();
+    console.log(`Gmail connected: ${email}`);
+    res.send(`<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:48px;text-align:center">
+      <h2 style="color:#34d399">Connected: ${email}</h2>
+      <p style="color:#94a3b8">Gmail sync is now active. You can close this window.</p>
+      <script>if(window.opener){window.opener.postMessage({type:'gmail-connected',email:'${email}'},'*');setTimeout(()=>window.close(),1500);}</script>
+    </body></html>`);
+  } catch(e) {
+    console.error('Gmail OAuth error:', e.message);
+    res.send(`<h2 style="color:red">Error: ${e.message}</h2>`);
+  }
+});
+
+app.get('/api/gmail/status', (req, res) => {
+  res.json({ success: true, accounts: Object.keys(gmailTokens), googleConfigured: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) });
+});
+
+app.delete('/api/gmail/disconnect', async (req, res) => {
+  const { account } = req.query;
+  if (account && gmailTokens[account]) { delete gmailTokens[account]; await persistConfig(); }
+  res.json({ success: true, accounts: Object.keys(gmailTokens) });
 });
 
 // Stats
