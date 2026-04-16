@@ -21,15 +21,58 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// ─── File paths ───────────────────────────────────────────────────────────────
-const DATA_DIR = path.join(__dirname, 'data');
-const SESSIONS_FILE  = path.join(DATA_DIR, 'sessions.json');
-const EMAILS_FILE    = path.join(DATA_DIR, 'emails.json');
-const PODCASTS_FILE  = path.join(DATA_DIR, 'podcasts.json');
-const WEBSITE_FILE   = path.join(DATA_DIR, 'website.json');
-const PERSONA_FILE   = path.join(DATA_DIR, 'persona.json');
-const MEMORY_FILE    = path.join(DATA_DIR, 'memory.json');
-const CONFIG_FILE    = path.join(DATA_DIR, 'config.json');
+// ─── Supabase (knowledge base) ────────────────────────────────────────────────
+const SUPABASE_URL      = process.env.SUPABASE_URL      || 'https://qiwdgyilhwkndqkgqruf.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpd2RneWlsaHdrbmRxa2dxcnVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwOTc4NDcsImV4cCI6MjA5MTY3Mzg0N30.bEhiitzcDMOpViFFtBhfbUKcHVDah8t7DvsNlTxaOEk';
+const SB_HOST = SUPABASE_URL.replace('https://', '');
+
+async function dbLoad(key, fallback) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: SB_HOST, port: 443,
+      path: `/rest/v1/bl_knowledge?key=eq.${key}&select=payload`,
+      method: 'GET',
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SUPABASE_ANON_KEY }
+    }, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const rows = JSON.parse(d);
+          const val = rows?.[0]?.payload;
+          resolve(val !== undefined && val !== null ? val : fallback);
+        } catch { resolve(fallback); }
+      });
+    });
+    req.on('error', () => resolve(fallback));
+    req.end();
+  });
+}
+
+async function dbSave(key, data) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify([{ key, payload: data }]);
+    const req = https.request({
+      hostname: SB_HOST, port: 443,
+      path: '/rest/v1/bl_knowledge',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_ANON_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+        'Prefer': 'resolution=merge-duplicates',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => { res.resume(); res.on('end', resolve); });
+    req.on('error', resolve);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Config file (API keys stay local — never in the cloud DB) ───────────────
+const DATA_DIR   = path.join(__dirname, 'data');
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 async function initDataDir() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -42,6 +85,7 @@ async function initDataDir() {
   } catch { /* no config yet, use env defaults */ }
 }
 
+// Local file helpers — only used for config.json
 async function load(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf-8')); }
   catch { return fallback; }
@@ -350,8 +394,8 @@ async function buildPersona(sessions) {
     .join('\n\n');
 
   // Include email bodies and podcast show notes as additional writing samples
-  const emails = await load(EMAILS_FILE, []);
-  const podcasts = await load(PODCASTS_FILE, []);
+  const emails = await dbLoad('emails', []);
+  const podcasts = await dbLoad('podcasts', []);
 
   const emailSamples = emails
     .slice(0, 6)
@@ -363,7 +407,7 @@ async function buildPersona(sessions) {
     .map(p => `[PODCAST "${p.podcast}" Ep${p.episode}: ${p.title}]\n${(p.body || '').substring(0, 300)}`)
     .join('\n\n');
 
-  const website = await load(WEBSITE_FILE, []);
+  const website = await dbLoad('website', []);
   const websiteSamples = website
     .map(w => `[WEBSITE ${w.site}]\n${(w.body || '').substring(0, 600)}`)
     .join('\n\n');
@@ -399,7 +443,7 @@ Return ONLY valid JSON.`;
   try {
     const raw = await callClaude('You are a behavioral analyst extracting communication patterns from transcripts.', prompt, 1000);
     const persona = JSON.parse(raw.replace(/```json\n?|```\n?/g, '').trim());
-    await save(PERSONA_FILE, persona);
+    await dbSave('persona', persona);
     console.log('Persona built and saved.');
     return persona;
   } catch(e) {
@@ -454,7 +498,7 @@ Return ONLY valid JSON.`;
       .map(([name, count]) => ({ name, meetingCount: count }));
     memory.totalSessions = sessions.length;
     memory.withTranscript = sessions.filter(s => s.transcript).length;
-    await save(MEMORY_FILE, memory);
+    await dbSave('memory', memory);
     console.log('Memory built and saved.');
     return memory;
   } catch(e) {
@@ -465,7 +509,7 @@ Return ONLY valid JSON.`;
 
 // ─── System Prompt Builder ────────────────────────────────────────────────────
 async function getSystemPrompt() {
-  const persona = await load(PERSONA_FILE, null);
+  const persona = await dbLoad('persona', null);
 
   let base = `You are Barnes Lam — responding based on your actual recorded sessions and thinking. You speak in first person as Barnes.
 
@@ -496,7 +540,7 @@ app.post('/api/extract', async (req, res) => {
     console.log('Fetching from Fathom...');
     const raw = await fetchAllFathomMeetings();
     const sessions = raw.map(fathomToSession);
-    await save(SESSIONS_FILE, sessions);
+    await dbSave('sessions', sessions);
     console.log(`Saved ${sessions.length} sessions.`);
 
     // Build persona and memory in background
@@ -518,7 +562,7 @@ app.post('/api/extract', async (req, res) => {
 // Explicitly rebuild persona
 app.post('/api/build-persona', async (req, res) => {
   try {
-    const sessions = await load(SESSIONS_FILE, []);
+    const sessions = await dbLoad('sessions', []);
     if (!sessions.length) return res.status(400).json({ success: false, error: 'No sessions. Extract first.' });
     const persona = await buildPersona(sessions);
     const memory  = await buildMemory(sessions);
@@ -530,13 +574,13 @@ app.post('/api/build-persona', async (req, res) => {
 
 // Get persona
 app.get('/api/persona', async (req, res) => {
-  const persona = await load(PERSONA_FILE, null);
+  const persona = await dbLoad('persona', null);
   res.json({ success: true, persona });
 });
 
 // Get memory
 app.get('/api/memory', async (req, res) => {
-  const memory = await load(MEMORY_FILE, null);
+  const memory = await dbLoad('memory', null);
   res.json({ success: true, memory });
 });
 
@@ -569,12 +613,10 @@ app.post('/api/config', async (req, res) => {
 // Stats
 app.get('/api/stats', async (req, res) => {
   try {
-    const sessions = await load(SESSIONS_FILE, []);
-    const emails   = await load(EMAILS_FILE, []);
-    const podcasts = await load(PODCASTS_FILE, []);
-    const website  = await load(WEBSITE_FILE, []);
-    const persona  = await load(PERSONA_FILE, null);
-    const memory   = await load(MEMORY_FILE, null);
+    const [sessions, emails, podcasts, website, persona, memory] = await Promise.all([
+      dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []),
+      dbLoad('website', []), dbLoad('persona', null), dbLoad('memory', null)
+    ]);
     res.json({
       success: true,
       videoCount: sessions.length,
@@ -595,10 +637,9 @@ app.get('/api/stats', async (req, res) => {
 app.post('/api/search', async (req, res) => {
   const { query, topK = 5 } = req.body;
   if (!query) return res.status(400).json({ success: false, error: 'query required' });
-  const sessions = await load(SESSIONS_FILE, []);
-  const emails   = await load(EMAILS_FILE, []);
-  const podcasts = await load(PODCASTS_FILE, []);
-  const website  = await load(WEBSITE_FILE, []);
+  const [sessions, emails, podcasts, website] = await Promise.all([
+    dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []), dbLoad('website', [])
+  ]);
   const sessionResults = searchSessions(sessions, query, topK).map(s => ({
     type: 'session', id: s.id, title: s.title, date: s.date, duration: s.duration,
     participants: s.participants,
@@ -622,7 +663,7 @@ app.post('/api/search', async (req, res) => {
 
 // Get all sessions (lightweight list)
 app.get('/api/sessions', async (req, res) => {
-  const sessions = await load(SESSIONS_FILE, []);
+  const sessions = await dbLoad('sessions', []);
   res.json({
     success: true, count: sessions.length,
     sessions: sessions.map(s => ({
@@ -638,10 +679,9 @@ app.post('/api/chat', async (req, res) => {
   if (!message) return res.status(400).json({ success: false, error: 'message required' });
 
   try {
-    const sessions = await load(SESSIONS_FILE, []);
-    const emails   = await load(EMAILS_FILE, []);
-    const podcasts = await load(PODCASTS_FILE, []);
-    const website  = await load(WEBSITE_FILE, []);
+    const [sessions, emails, podcasts, website] = await Promise.all([
+      dbLoad('sessions', []), dbLoad('emails', []), dbLoad('podcasts', []), dbLoad('website', [])
+    ]);
     if (!sessions.length && !emails.length && !podcasts.length && !website.length) {
       return res.status(400).json({ success: false, error: 'No knowledge base. Run /api/extract first.' });
     }
@@ -711,7 +751,7 @@ app.post('/api/ask', async (req, res) => {
   req.body.message = req.body.question;
   // just forward to chat handler logic inline
   try {
-    const sessions = await load(SESSIONS_FILE, []);
+    const sessions = await dbLoad('sessions', []);
     const relevant = searchSessions(sessions, req.body.question, 5);
     const context  = buildContext(relevant);
     const systemPrompt = await getSystemPrompt();
