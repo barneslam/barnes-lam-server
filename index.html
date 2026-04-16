@@ -272,9 +272,12 @@
   </div>
   <div class="topbar-actions">
     <button class="btn btn-secondary" id="voiceToggleBtn" onclick="toggleVoiceMode()">🎙 Voice</button>
-    <button class="btn btn-secondary" onclick="openSettings()">⚙️ Settings</button>
-    <button class="btn btn-secondary" id="buildBtn" onclick="buildPersona()">Build Persona</button>
-    <button class="btn btn-primary" id="extractBtn" onclick="extract()">Sync Fathom</button>
+    <button class="btn btn-secondary" id="adminBtn" onclick="toggleAdminPanel()" title="Admin tools">⚙</button>
+  </div>
+  <!-- Admin panel (hidden by default) -->
+  <div id="adminPanel" style="display:none;gap:8px;align-items:center;margin-left:8px;">
+    <button class="btn btn-secondary" id="buildBtn" onclick="buildPersona()">Rebuild Persona</button>
+    <button class="btn btn-secondary" id="extractBtn" onclick="extract()">Sync Fathom</button>
   </div>
 </div>
 
@@ -355,7 +358,7 @@
       <div class="welcome" id="welcome">
         <div class="welcome-icon">🧠</div>
         <h2>Ask Barnes anything</h2>
-        <p>This AI is grounded in Barnes's actual recordings. It answers from his real words, frameworks, and thinking patterns.</p>
+        <p>Grounded in 200 recorded sessions and Barnes's actual words. Ready now — no setup needed.</p>
         <div class="starter-btns">
           <button class="starter" onclick="sendStarter(this)">How do you approach hard decisions?</button>
           <button class="starter" onclick="sendStarter(this)">What do you think about money?</button>
@@ -522,6 +525,16 @@
         ${rels || '<div class="empty-msg">None yet</div>'}
       </div>
     `;
+  }
+
+  // ── Admin panel toggle ───────────────────────────────────────────────────────
+  function toggleAdminPanel() {
+    const panel = document.getElementById('adminPanel');
+    const btn = document.getElementById('adminBtn');
+    const visible = panel.style.display === 'flex';
+    panel.style.display = visible ? 'none' : 'flex';
+    btn.style.background = visible ? '' : '#334155';
+    btn.style.color = visible ? '' : '#e2e8f0';
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────
