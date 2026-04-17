@@ -3,8 +3,8 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Copy package files and install deps
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package*.json ./
+RUN npm install --omit=dev
 
 # Copy application files
 COPY server.js index.html ./
