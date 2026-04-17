@@ -61,8 +61,15 @@ async function buildMemory(sessions) {
   "lastUpdated": "${now}"
 }`;
 
-  const raw = await callClaude('You are analyzing meeting patterns for a personal knowledge system.', [{ role: 'user', content: prompt }], 800);
-  const memory = JSON.parse(raw.replace(/```json\n?|```\n?/g, '').trim());
+  const raw = await callClaude('You are analyzing meeting patterns for a personal knowledge system.', [{ role: 'user', content: prompt }], 1500);
+  const cleaned = raw.replace(/```json\n?|```\n?/g, '').trim();
+  let memory;
+  try {
+    memory = JSON.parse(cleaned);
+  } catch (parseErr) {
+    const lastBrace = cleaned.lastIndexOf('}');
+    memory = JSON.parse(cleaned.substring(0, lastBrace + 1));
+  }
   memory.topPeople = Object.entries(peopleMap)
     .sort((a,b) => b[1]-a[1]).slice(0, 10)
     .map(([name, meetingCount]) => ({ name, meetingCount }));

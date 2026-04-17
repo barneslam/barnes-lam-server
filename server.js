@@ -654,8 +654,16 @@ Return JSON:
 Return ONLY valid JSON.`;
 
   try {
-    const raw = await callClaude('You are analyzing meeting patterns for a personal knowledge system.', prompt, 800);
-    const memory = JSON.parse(raw.replace(/```json\n?|```\n?/g, '').trim());
+    const raw = await callClaude('You are analyzing meeting patterns for a personal knowledge system.', prompt, 1500);
+    const cleaned = raw.replace(/```json\n?|```\n?/g, '').trim();
+    let memory;
+    try {
+      memory = JSON.parse(cleaned);
+    } catch (parseErr) {
+      // Attempt recovery: truncate to last complete object
+      const lastBrace = cleaned.lastIndexOf('}');
+      memory = JSON.parse(cleaned.substring(0, lastBrace + 1));
+    }
     memory.topPeople = Object.entries(peopleMap)
       .sort((a,b) => b[1]-a[1])
       .slice(0, 10)
@@ -711,6 +719,35 @@ YOUR PERSONAL LIFE CONTEXT (as of early 2026):
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ─── Notes (Journal) ──────────────────────────────────────────────────────────
+app.get('/api/notes', async (req, res) => {
+  try {
+    const notes = await dbLoad('notes', []);
+    res.json({ success: true, notes });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.post('/api/notes', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text?.trim()) return res.status(400).json({ success: false, error: 'text required' });
+    const notes = await dbLoad('notes', []);
+    const note = { id: Date.now().toString(), text: text.trim(), date: new Date().toISOString() };
+    notes.unshift(note);
+    await dbSave('notes', notes);
+    res.json({ success: true, note });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+app.delete('/api/notes/:id', async (req, res) => {
+  try {
+    const notes = await dbLoad('notes', []);
+    const filtered = notes.filter(n => n.id !== req.params.id);
+    await dbSave('notes', filtered);
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // Extract from Fathom + rebuild persona + memory
